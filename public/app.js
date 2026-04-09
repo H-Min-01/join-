@@ -13,6 +13,7 @@ const state = {
   wsState: "idle",
   timerInterval: null,
   timerRemaining: null,
+  keyboardHandler: null,
   // 로비 상태
   menuOpen: false,
   lobbyView: "home",  // "home" | "find"
@@ -770,26 +771,45 @@ async function openProfileModal() {
     const { stats } = await api(`/api/users/${encodeURIComponent(state.session.guestId)}/stats`);
     const el = document.querySelector("#profile-stats");
     if (el) {
+      const winPct = Math.round(stats.winRate ?? 0);
+      const lossPct = 100 - winPct;
+      const streak = stats.currentStreak ?? stats.streak ?? null;
+      const bestStreak = stats.bestStreak ?? null;
+
       el.innerHTML = `
-        <div class="metrics">
-          <article class="metric">
-            <span class="muted">승리</span>
-            <strong>${stats.gamesWon}</strong>
-          </article>
-          <article class="metric">
+        <div class="profile-stats-grid">
+          <div class="profile-stat-big">
             <span class="muted">총 게임</span>
             <strong>${stats.gamesPlayed}</strong>
-          </article>
-          <article class="metric">
-            <span class="muted">승률</span>
-            <strong>${stats.winRate}%</strong>
-          </article>
-          <article class="metric">
+          </div>
+          <div class="profile-stat-big">
+            <span class="muted">승리</span>
+            <strong style="color:var(--success)">${stats.gamesWon}</strong>
+          </div>
+          <div class="profile-stat-big">
             <span class="muted">평균 시도</span>
             <strong>${stats.averageAttempts}회</strong>
-          </article>
+          </div>
+          ${streak !== null ? `
+          <div class="profile-stat-big">
+            <span class="muted">연속 승리</span>
+            <strong style="color:var(--accent)">${streak}🔥</strong>
+          </div>` : ""}
         </div>
-        <p class="muted" style="margin-top:4px">Word: ${stats.wordGames}게임 &middot; Number: ${stats.numberGames}게임</p>
+
+        <div style="margin-top:14px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+            <span class="muted" style="font-size:0.82rem">승률</span>
+            <span style="font-weight:800;font-size:0.88rem">${winPct}%</span>
+          </div>
+          <div class="profile-winbar">
+            <div class="profile-winbar__win" style="width:${winPct}%">${winPct > 12 ? "승" : ""}</div>
+            <div class="profile-winbar__loss" style="width:${lossPct}%">${lossPct > 12 ? "패" : ""}</div>
+          </div>
+        </div>
+
+        ${bestStreak !== null ? `<p class="muted" style="margin-top:10px;font-size:0.82rem">최고 연속 승리: <strong>${bestStreak}회</strong></p>` : ""}
+        <p class="muted" style="margin-top:6px;font-size:0.82rem">Word: ${stats.wordGames}게임 &middot; Number: ${stats.numberGames}게임</p>
       `;
     }
   } catch {
@@ -1085,32 +1105,9 @@ function renderRoom() {
     }
   });
 
-  const guessForm = document.querySelector("#guess-form");
-  if (guessForm) {
-    const guessInput = document.querySelector("#guess-input");
-    guessInput.addEventListener("input", (e) => {
-      state.draft = e.target.value.toUpperCase().slice(0, room.settings.length);
-      e.target.value = state.draft;
-    });
-    guessForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      if (!state.draft.trim()) {
-        showToast("추측 값을 입력해 주세요.", "error");
-        return;
-      }
-      try {
-        const payload = await api(`/api/rooms/${room.id}/guess`, {
-          method: "POST",
-          body: { guestId: state.session.guestId, guess: state.draft.trim() }
-        });
-        state.room = normalizeRoom(payload.room);
-        state.draft = "";
-        render();
-      } catch (error) {
-        showToast(error.message, "error");
-      }
-    });
-  }
+  attachKeyboardListeners(room, canPlay);
+
+  document.querySelector("#share-result-btn")?.addEventListener("click", () => shareResult(room));
 }
 
 function renderMainPanel(room, canPlay, isSolo = false) {
@@ -1144,6 +1141,11 @@ function renderMainPanel(room, canPlay, isSolo = false) {
     `;
   }
 
+  const letterStates = room.settings.gameType === "wordle"
+    ? buildLetterStates(room.me?.attempts ?? [])
+    : {};
+  const usedDigitsInDraft = new Set(state.draft.split("").filter(Boolean));
+
   return `
     <div class="guess-panel">
       ${room.status === "finished"
@@ -1160,31 +1162,20 @@ function renderMainPanel(room, canPlay, isSolo = false) {
               }
             </p>
           </div>
-          <form id="guess-form" class="guess-form">
-            <div class="guess-form__row">
-              <input
-                id="guess-input"
-                class="guess-input"
-                autocomplete="off"
-                autocapitalize="characters"
-                spellcheck="false"
-                maxlength="${room.settings.length}"
-                placeholder="${room.settings.gameType === "wordle" ? `${room.settings.length}글자 단어` : `${room.settings.length}자리 숫자`}"
-                value="${escapeHtml(state.draft)}"
-                ${canPlay ? "" : "disabled"}
-              />
-              <button class="button" type="submit" ${canPlay ? "" : "disabled"}>제출</button>
+          ${room.settings.gameType === "baseball" ? `
+            <div class="draft-display" id="draft-display">
+              ${renderDraftCells(state.draft, room.settings.length)}
             </div>
-            <p class="footer-note">
-              ${room.settings.gameType === "wordle"
-                ? `영문 ${room.settings.length}글자를 입력하세요.`
-                : "첫 자리는 0이 될 수 없고 숫자는 중복될 수 없습니다."
-              }
-            </p>
-          </form>
+          ` : ""}
         `
       }
       ${room.settings.gameType === "wordle" ? renderWordleBoard(room) : renderBaseballBoard(room)}
+      ${canPlay
+        ? (room.settings.gameType === "wordle"
+            ? renderWordKeyboard(letterStates)
+            : renderNumberKeyboard(usedDigitsInDraft, state.draft.length))
+        : ""
+      }
       ${!canPlay && room.status === "playing" ? '<p class="empty-state">이번 라운드 입력이 종료되었습니다.</p>' : ""}
     </div>
   `;
@@ -1248,13 +1239,19 @@ function renderResultBanner(room, isSolo = false) {
       : "이번 라운드는 승자가 없었습니다";
   }
 
+  const emojiGrid = buildResultEmojiGrid(room);
+
   return `
     <div class="result-banner">
       <span class="hero__eyebrow">${isSolo ? "게임 종료" : "라운드 종료"}</span>
       <strong>${title}</strong>
       <p class="muted">정답은 <strong>${escapeHtml(result?.secret ?? "-")}</strong> 입니다.</p>
       <p class="muted">시도 횟수: ${attemptsLabel}</p>
-      <p class="muted">${isSolo
+      ${emojiGrid ? `<pre class="result-emoji-grid">${emojiGrid}</pre>` : ""}
+      <div class="button-row" style="margin-top:4px">
+        <button class="tonal-button" id="share-result-btn">결과 공유</button>
+      </div>
+      <p class="muted" style="font-size:0.82rem">${isSolo
         ? "다시 하기를 누르면 같은 설정으로 새 게임을 시작합니다."
         : (room.me?.isHost ? "방장이 다시 하기를 누르면 새 라운드를 시작할 수 있습니다." : "방장이 다시 하기를 누르면 새 라운드가 시작됩니다.")
       }</p>
@@ -1314,10 +1311,12 @@ function startTimer(room) {
     if (remaining <= 0) {
       stopTimer();
       showToast("시간이 초과되었습니다!", "error");
-      const inp = document.querySelector("#guess-input");
-      const btn = document.querySelector("#guess-form button[type=submit]");
-      if (inp) inp.disabled = true;
-      if (btn) btn.disabled = true;
+      // Disable virtual keyboard
+      if (state.keyboardHandler) {
+        document.removeEventListener("keydown", state.keyboardHandler);
+        state.keyboardHandler = null;
+      }
+      document.querySelectorAll(".keyboard-key").forEach(btn => { btn.disabled = true; });
     }
   }
 
@@ -1404,6 +1403,10 @@ function disconnectSocket() {
   if (state.socket) { const s = state.socket; state.socket = null; s.close(); }
   state.wsState = "idle";
   stopTimer();
+  if (state.keyboardHandler) {
+    document.removeEventListener("keydown", state.keyboardHandler);
+    state.keyboardHandler = null;
+  }
 }
 
 // ── 라우팅 ───────────────────────────────────────────────────────────────────
@@ -1502,4 +1505,244 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+// ── 결과 공유 ─────────────────────────────────────────────────────────────────
+
+function buildResultEmojiGrid(room) {
+  const attempts = room.me?.attempts ?? [];
+  if (!attempts.length) return "";
+  if (room.settings.gameType === "wordle") {
+    return attempts.map(a =>
+      (a.feedback ?? []).map(f =>
+        f.state === "correct" ? "🟩" : f.state === "present" ? "🟨" : "⬜"
+      ).join("")
+    ).join("\n");
+  }
+  // baseball: show S/B per attempt
+  return attempts.map(a => `${escapeHtml(a.guess)}  ${escapeHtml(a.summary)}`).join("\n");
+}
+
+async function shareResult(room) {
+  const mode = room.settings.gameType === "wordle" ? "Wordle" : "숫자야구";
+  const length = room.settings.length;
+  const count = room.me?.attemptCount ?? (room.me?.attempts?.length ?? 0);
+  const max = room.maxAttempts;
+  const won = room.result?.winnerGuestId === state.session.guestId;
+  const emojiGrid = buildResultEmojiGrid(room);
+
+  const headline = won
+    ? `${mode} ${length}글자 — ${count}${max ? `/${max}` : ""}회 성공! 🎉`
+    : `${mode} ${length}글자 — 아쉽게 실패 😢`;
+
+  const text = [headline, emojiGrid, room.shareUrl].filter(Boolean).join("\n");
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: "Join! 게임 결과", text });
+      showToast("공유했습니다.", "success");
+      return;
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("결과를 클립보드에 복사했습니다.", "success");
+  } catch {
+    showToast("공유에 실패했습니다.", "error");
+  }
+}
+
+// ── 가상 키보드 ───────────────────────────────────────────────────────────────
+
+function buildLetterStates(attempts) {
+  const PRIORITY = { correct: 3, present: 2, absent: 1, default: 0 };
+  const states = {};
+  for (const attempt of attempts) {
+    if (!attempt.feedback) continue;
+    attempt.guess.split("").forEach((letter, i) => {
+      const fb = attempt.feedback[i];
+      if (!fb) return;
+      const prev = PRIORITY[states[letter]] ?? -1;
+      const cur = PRIORITY[fb.state] ?? 0;
+      if (cur > prev) states[letter] = fb.state;
+    });
+  }
+  return states;
+}
+
+function renderWordKeyboard(letterStates) {
+  const rows = [
+    ["Q","W","E","R","T","Y","U","I","O","P"],
+    ["A","S","D","F","G","H","J","K","L"],
+    ["ENTER","Z","X","C","V","B","N","M","DEL"]
+  ];
+  return `
+    <div class="keyboard keyboard--word">
+      ${rows.map(row => `
+        <div class="keyboard-row">
+          ${row.map(key => {
+            const st = letterStates[key] || "default";
+            const isSpecial = key === "ENTER" || key === "DEL";
+            const label = key === "DEL" ? "←" : key;
+            return `<button
+              class="keyboard-key${st !== "default" ? ` keyboard-key--${st}` : ""}${isSpecial ? " keyboard-key--wide" : ""}"
+              data-key="${key}"
+            >${label}</button>`;
+          }).join("")}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderNumberKeyboard(usedDigits, draftLen) {
+  const rows = [
+    ["1","2","3","4","5"],
+    ["6","7","8","9","0"],
+    ["ENTER","DEL"]
+  ];
+  return `
+    <div class="keyboard keyboard--number">
+      ${rows.map(row => `
+        <div class="keyboard-row">
+          ${row.map(key => {
+            const isSpecial = key === "ENTER" || key === "DEL";
+            const isUsed = usedDigits.has(key);
+            const label = key === "DEL" ? "←" : key;
+            const disabled = isUsed || (key === "ENTER" && draftLen === 0);
+            return `<button
+              class="keyboard-key${isSpecial ? " keyboard-key--wide" : ""}${isUsed ? " keyboard-key--used" : ""}"
+              data-key="${key}"
+              ${disabled ? "disabled" : ""}
+            >${label}</button>`;
+          }).join("")}
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderDraftCells(draft, length) {
+  return Array.from({ length }, (_, i) => {
+    const ch = draft[i] || "";
+    return `<div class="draft-cell ${ch ? "filled" : ""}">${escapeHtml(ch)}</div>`;
+  }).join("");
+}
+
+function attachKeyboardListeners(room, canPlay) {
+  // Remove previous handler
+  if (state.keyboardHandler) {
+    document.removeEventListener("keydown", state.keyboardHandler);
+    state.keyboardHandler = null;
+  }
+
+  if (!canPlay) return;
+
+  state.keyboardHandler = (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Don't intercept if user is typing in an input
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleKeySubmit(room);
+    } else if (e.key === "Backspace") {
+      e.preventDefault();
+      handleKeyDelete(room);
+    } else if (room.settings.gameType === "wordle" && /^[a-zA-Z]$/.test(e.key)) {
+      handleKeyLetter(e.key.toUpperCase(), room);
+    } else if (room.settings.gameType === "baseball" && /^[0-9]$/.test(e.key)) {
+      handleKeyDigit(e.key, room);
+    }
+  };
+  document.addEventListener("keydown", state.keyboardHandler);
+
+  // Virtual keyboard click listeners
+  document.querySelectorAll(".keyboard-key[data-key]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const key = btn.dataset.key;
+      if (key === "ENTER") handleKeySubmit(room);
+      else if (key === "DEL") handleKeyDelete(room);
+      else if (room.settings.gameType === "wordle") handleKeyLetter(key, room);
+      else handleKeyDigit(key, room);
+    });
+  });
+}
+
+function handleKeyLetter(letter, room) {
+  if (state.draft.length >= room.settings.length) return;
+  state.draft += letter;
+  updateDraftDisplay(room);
+}
+
+function handleKeyDelete(room) {
+  if (!state.draft.length) return;
+  state.draft = state.draft.slice(0, -1);
+  updateDraftDisplay(room);
+}
+
+function handleKeyDigit(digit, room) {
+  if (state.draft.includes(digit)) return;
+  if (state.draft.length >= room.settings.length) return;
+  state.draft += digit;
+  updateDraftDisplay(room);
+}
+
+async function handleKeySubmit(room) {
+  if (state.draft.length !== room.settings.length) {
+    showToast(`${room.settings.length}${room.settings.gameType === "wordle" ? "글자" : "자리"}를 모두 입력하세요.`, "error");
+    return;
+  }
+  try {
+    const payload = await api(`/api/rooms/${room.id}/guess`, {
+      method: "POST",
+      body: { guestId: state.session.guestId, guess: state.draft }
+    });
+    state.room = normalizeRoom(payload.room);
+    state.draft = "";
+    render();
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function updateDraftDisplay(room) {
+  // Update wordle active row
+  if (room.settings.gameType === "wordle") {
+    const attempts = room.me?.attempts ?? [];
+    const rows = document.querySelectorAll(".wordle-row");
+    const activeRow = rows[attempts.length];
+    if (activeRow) {
+      const cells = activeRow.querySelectorAll(".wordle-cell");
+      const letters = state.draft.padEnd(room.settings.length, " ").split("");
+      cells.forEach((cell, i) => {
+        cell.textContent = letters[i] === " " ? "" : letters[i];
+      });
+    }
+  }
+
+  // Update baseball draft display
+  if (room.settings.gameType === "baseball") {
+    const draftEl = document.querySelector("#draft-display");
+    if (draftEl) draftEl.innerHTML = renderDraftCells(state.draft, room.settings.length);
+  }
+
+  // Update number keyboard button disabled state
+  if (room.settings.gameType === "baseball") {
+    const usedDigits = new Set(state.draft.split("").filter(Boolean));
+    document.querySelectorAll(".keyboard-key[data-key]").forEach(btn => {
+      const key = btn.dataset.key;
+      if (/^[0-9]$/.test(key)) {
+        btn.disabled = usedDigits.has(key);
+        btn.classList.toggle("keyboard-key--used", usedDigits.has(key));
+      }
+    });
+  }
+
+  // Update ENTER button disabled state
+  const enterBtn = document.querySelector(".keyboard-key[data-key='ENTER']");
+  if (enterBtn) {
+    enterBtn.disabled = state.draft.length !== room.settings.length;
+  }
 }
