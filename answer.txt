@@ -1,0 +1,216 @@
+# 🎯 답변
+
+```
+네, 4단계로 진행해주세요!
+
+게임 화면을 완성하겠습니다.
+
+---
+
+## 📋 4단계 구현 항목
+
+### 🎯 핵심: 화면 키패드 구현
+
+---
+
+## 1. Word 모드 키패드 (QWERTY 레이아웃)
+
+### 레이아웃
+```
+┌─────────────────────────────────────┐
+│    [ Q W E R T Y U I O P ]         │
+│     [ A S D F G H J K L ]          │
+│    [ ENTER Z X C V B N M ← ]       │
+└─────────────────────────────────────┘
+```
+
+### 기능
+- 클릭 시 현재 입력란에 글자 추가
+- ENTER: 추측 제출 (길이 충족 시만)
+- ← (DELETE): 마지막 글자 삭제
+- 사용된 글자 상태 표시:
+  - ⬜ 기본 (회색)
+  - 🟡 yellow (노란색 배경)
+  - 🟢 green (초록색 배경)
+
+### 상태 관리
+```javascript
+// 각 글자의 최고 상태 추적
+const letterStates = {
+  'A': 'default',  // 'default' | 'absent' | 'present' | 'correct'
+  'B': 'absent',   // ⬜ gray
+  'E': 'present',  // 🟡 yellow
+  'G': 'correct',  // 🟢 green
+  // ...
+}
+
+// 시도마다 업데이트
+// correct > present > absent > default
+```
+
+---
+
+## 2. Number 모드 키패드 (숫자 패드)
+
+### 레이아웃
+```
+┌─────────────────────────────────────┐
+│    [ 1  2  3  4  5 ]               │
+│    [ 6  7  8  9  0 ]               │
+│    [ ENTER      ← ]                │
+└─────────────────────────────────────┘
+```
+
+### 기능
+- 클릭 시 현재 입력란에 숫자 추가
+- **중복 숫자 자동 차단**: 이미 입력된 숫자는 클릭 비활성화
+- ENTER: 추측 제출 (길이 충족 시만)
+- ← (DELETE): 마지막 숫자 삭제
+- 사용된 숫자 시각적 표시 (흐리게 또는 체크 마크)
+
+---
+
+## 3. 공통 기능
+
+### 키보드 이벤트 지원
+```javascript
+// 물리 키보드도 동일하게 작동
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleSubmit()
+  if (e.key === 'Backspace') handleDelete()
+  if (/^[a-zA-Z]$/.test(e.key)) handleLetter(e.key.toUpperCase())
+  if (/^[0-9]$/.test(e.key)) handleNumber(e.key)
+})
+```
+
+### 입력 상태 표시
+```
+현재 입력: G R E _ _
+          🟢🟢🟡
+
+- 채워진 칸: 글자 표시
+- 빈 칸: 밑줄 또는 회색 박스
+- 커서 위치 표시 (깜빡임)
+```
+
+### 버튼 상태
+- 기본: 활성화 (클릭 가능)
+- 입력 중복 (Number): 비활성화 (회색 + 클릭 불가)
+- 길이 미충족: ENTER 비활성화
+- 시간 초과/시도 소진: 모든 버튼 비활성화
+
+---
+
+## 4. 타이머 개선 (기존 보완)
+
+### 시각적 강조
+```javascript
+// 남은 시간에 따른 색상 변경
+if (remaining <= 10) {
+  // 10초 이하: 빨간색 + 빠른 깜빡임
+  pill.classList.add('timer-pill--critical')
+} else if (remaining <= 30) {
+  // 30초 이하: 주황색 + 깜빡임
+  pill.classList.add('timer-pill--urgent')
+}
+```
+
+---
+
+## 5. 멀티플레이 UI 개선
+
+### 좌측 플레이어 목록 (기존 보완)
+```
+┌────────────┐
+│ User1: 3/6 │ ← 완료
+│ ✓ 🟢🟡⬜  │
+│            │
+│ User2: 2/6 │ ← 진행 중 (강조)
+│ → 🟢⬜⬜  │
+│            │
+│ User3: 1/6 │
+│   ⬜⬜⬜  │
+└────────────┘
+```
+
+### 실시간 업데이트
+- 다른 플레이어 시도 시 애니메이션
+- 완료된 플레이어 체크 마크 ✓
+- 현재 입력 중인 플레이어 → 화살표
+
+---
+
+## 6. 스타일 요구사항
+
+### 키패드 버튼
+```css
+.keyboard-key {
+  min-width: 44px;  /* 터치 최소 크기 */
+  min-height: 44px;
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.keyboard-key:active {
+  transform: scale(0.95);
+}
+
+.keyboard-key--absent {
+  background: #787c7e;  /* gray */
+  color: white;
+}
+
+.keyboard-key--present {
+  background: #c9b458;  /* yellow */
+  color: white;
+}
+
+.keyboard-key--correct {
+  background: #6aaa64;  /* green */
+  color: white;
+}
+
+.keyboard-key:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+```
+
+---
+
+## ⚠️ 주의사항
+
+### Word 모드
+- 각 글자의 상태는 **최고 상태로 유지**
+  - 예: E가 한 번 green이면 이후 yellow 나와도 green 유지
+
+### Number 모드
+- **중복 숫자 절대 입력 불가**
+- 이미 입력된 숫자 버튼 비활성화
+- DELETE 시 해당 숫자 버튼 다시 활성화
+
+### 멀티플레이
+- 다른 플레이어의 **실제 입력값은 절대 노출 금지**
+- 진행도(시도 횟수, 완료 여부)만 표시
+
+---
+
+## 📱 모바일 최적화
+
+- 키패드 버튼 크기: 최소 44x44px
+- 터치 피드백: scale(0.95)
+- 물리 키보드 숨김 처리
+- 화면 회전 대응
+
+---
+
+4단계 시작해주세요!
+
+화면 키패드는 게임 경험의 핵심이므로 특히 신경 써서 구현해주세요.
+```
+
+---
